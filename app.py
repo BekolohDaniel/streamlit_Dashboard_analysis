@@ -3,170 +3,264 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import plotly.express as px
-
-# Page setup (wide layout for better dashboard view)
-st.set_page_config(layout="wide")
+from sklearn.ensemble import IsolationForest
 
 # =========================
-# 1. Load Data (with caching)
+# App Config
+# =========================
+st.set_page_config(layout="wide", page_title="Transaction & Fraud Dashboard")
+
+# =========================
+# Load Data
 # =========================
 @st.cache_data
 def load_data():
-    # Load dataset once and cache it for speed
     return pd.read_csv("Dataset.csv")
 
-df = load_data()
+transactions = load_data()
 
-st.title("📊 Interactive Financial Transactions & Fraud Dashboard")
+st.title("💳 Transaction Analytics & Fraud Detection Dashboard")
 
 # =========================
-# 2. Sidebar Filters
+# Data Preparation
 # =========================
-st.sidebar.header("🔍 Filters")
+transactions['TransactionStartTime'] = pd.to_datetime(transactions['TransactionStartTime'])
+transactions['Date'] = transactions['TransactionStartTime'].dt.date
+transactions['Hour'] = transactions['TransactionStartTime'].dt.hour
+transactions['Day'] = transactions['TransactionStartTime'].dt.day
+transactions['Month'] = transactions['TransactionStartTime'].dt.month
+
+# =========================
+# Sidebar Filters
+# =========================
+st.sidebar.header("🔎 Filters")
 
 # ---- Date Filter ----
-if 'Date' in df.columns:
-    df['Date'] = pd.to_datetime(df['Date'])
+start_date = transactions['Date'].min()
+end_date = transactions['Date'].max()
 
-    date_min = df['Date'].min()
-    date_max = df['Date'].max()
+selected_dates = st.sidebar.date_input(
+    "Select Date Range",
+    [start_date, end_date]
+)
 
-    date_range = st.sidebar.date_input(
-        "Select Date Range",
-        [date_min, date_max]
-    )
+if len(selected_dates) == 2:
+    transactions = transactions[
+        (transactions['Date'] >= selected_dates[0]) &
+        (transactions['Date'] <= selected_dates[1])
+    ]
 
-    if len(date_range) == 2:
-        df = df[
-            (df['Date'] >= pd.to_datetime(date_range[0])) &
-            (df['Date'] <= pd.to_datetime(date_range[1]))
-        ]
+# ---- Product Category ----
+selected_categories = st.sidebar.multiselect(
+    "Product Category",
+    transactions['ProductCategory'].unique(),
+    default=transactions['ProductCategory'].unique()
+)
 
-# ---- Categorical Filters ----
-categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+transactions = transactions[
+    transactions['ProductCategory'].isin(selected_categories)
+]
 
-for col in categorical_cols:
-    values = df[col].dropna().unique().tolist()
+# ---- Channel Filter ----
+selected_channels = st.sidebar.multiselect(
+    "Channel",
+    transactions['ChannelId'].unique(),
+    default=transactions['ChannelId'].unique()
+)
 
-    selected = st.sidebar.multiselect(
-        f"Filter {col}",
-        values,
-        default=values[:5] if len(values) > 5 else values  # 👈 limit default selection
-    )
+transactions = transactions[
+    transactions['ChannelId'].isin(selected_channels)
+]
 
-    if selected:
-        df = df[df[col].isin(selected)]
+# ---- Pricing Strategy ----
+selected_pricing = st.sidebar.multiselect(
+    "Pricing Strategy",
+    transactions['PricingStrategy'].unique(),
+    default=transactions['PricingStrategy'].unique()
+)
+
+transactions = transactions[
+    transactions['PricingStrategy'].isin(selected_pricing)
+]
 
 # =========================
-# 3. Variable Selection
+# KPIs
 # =========================
-numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+st.subheader("📌 Key Metrics")
 
-col_x = st.sidebar.selectbox("X (Category)", categorical_cols)
-col_y = st.sidebar.selectbox("Y (Numeric)", numeric_cols)
-col_color = st.sidebar.selectbox("Color (Optional)", [None] + categorical_cols)
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Total Transactions", len(transactions))
+col2.metric("Total Amount", f"{transactions['Amount'].sum():,.0f}")
+col3.metric("Total Value", f"{transactions['Value'].sum():,.0f}")
+col4.metric("Fraud Cases", transactions['FraudResult'].sum())
 
 # =========================
-# 4. Charts
+# Time Trend
 # =========================
+st.subheader("📈 Transactions Over Time")
 
-# ---- Time Trend ----
-if 'Date' in df.columns:
-    st.subheader("📈 Time Trend")
+time_trend = transactions.groupby('Date')['Amount'].sum().reset_index()
 
-    line_data = df.groupby('Date')[col_y].mean().reset_index()
+fig_time = px.line(
+    time_trend,
+    x='Date',
+    y='Amount',
+    title="Total Transaction Amount Over Time"
+)
 
-    fig_line = px.line(
-        line_data,
-        x='Date',
-        y=col_y,
-        title=f"Average {col_y} Over Time"
-    )
+st.plotly_chart(fig_time, use_container_width=True)
 
-    st.plotly_chart(fig_line, use_container_width=True)
-
-# ---- Histogram ----
-st.subheader("📊 Distribution")
-
-bins = st.slider("Select number of bins", 10, 100, 30)  # 👈 NEW interactive feature
+# =========================
+# Distribution
+# =========================
+st.subheader("📊 Amount Distribution")
 
 fig_hist = px.histogram(
-    df,
-    x=col_y,
-    color=col_color,
-    nbins=bins
+    transactions,
+    x='Amount',
+    nbins=30,
+    color='ProductCategory'
 )
 
 st.plotly_chart(fig_hist, use_container_width=True)
 
-# ---- Bar Chart ----
-st.subheader("📊 Average by Category")
+# =========================
+# Category Analysis
+# =========================
+st.subheader("📊 Average Amount by Product Category")
 
-agg_data = df.groupby(col_x)[col_y].mean().reset_index()
+category_analysis = transactions.groupby('ProductCategory')['Amount'].mean().reset_index()
 
-fig_bar = px.bar(
-    agg_data,
-    x=col_x,
-    y=col_y,
-    color=col_x,
-    title=f"Average {col_y} by {col_x}"
+fig_cat = px.bar(
+    category_analysis,
+    x='ProductCategory',
+    y='Amount',
+    color='ProductCategory'
 )
 
-st.plotly_chart(fig_bar, use_container_width=True)
+st.plotly_chart(fig_cat, use_container_width=True)
 
-# ---- Correlation Heatmap ----
+# =========================
+# Channel Analysis
+# =========================
+st.subheader("📡 Channel Performance")
+
+channel_analysis = transactions.groupby('ChannelId')['Amount'].sum().reset_index()
+
+fig_channel = px.bar(
+    channel_analysis,
+    x='ChannelId',
+    y='Amount',
+    color='ChannelId'
+)
+
+st.plotly_chart(fig_channel, use_container_width=True)
+
+# =========================
+# Hourly Pattern
+# =========================
+st.subheader("⏰ Transactions by Hour")
+
+hourly = transactions.groupby('Hour')['Amount'].count().reset_index()
+
+fig_hour = px.bar(
+    hourly,
+    x='Hour',
+    y='Amount',
+    title="Number of Transactions per Hour"
+)
+
+st.plotly_chart(fig_hour, use_container_width=True)
+
+# =========================
+# Correlation Heatmap
+# =========================
 st.subheader("🔥 Correlation Heatmap")
 
-corr = df[numeric_cols].corr()
+numeric_cols = ['Amount', 'Value', 'PricingStrategy', 'Hour', 'Day']
+
+corr = transactions[numeric_cols].corr()
 
 fig_corr, ax = plt.subplots(figsize=(10, 6))
 sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax)
 
 st.pyplot(fig_corr)
 
-# ---- Pie Chart ----
-if col_x:
-    st.subheader("🥧 Category Distribution")
-
-    fig_pie = px.pie(
-        df,
-        names=col_x,
-        title=f"Distribution of {col_x}"
-    )
-
-    st.plotly_chart(fig_pie, use_container_width=True)
-
 # =========================
-# 5. Table Analysis
+# Fraud Analysis (REAL DATA)
 # =========================
-st.subheader("📋 Table Analysis")
+st.subheader("🚨 Actual Fraud Analysis")
 
-groupby_col = st.selectbox("Group by", categorical_cols)
+fraud_distribution = transactions['FraudResult'].value_counts().reset_index()
+fraud_distribution.columns = ['Fraud', 'Count']
 
-agg_col = st.multiselect(
-    "Select columns to analyze",
-    numeric_cols,
-    default=numeric_cols[:1]
+fig_fraud_real = px.pie(
+    fraud_distribution,
+    names='Fraud',
+    values='Count',
+    title="Actual Fraud vs Normal"
 )
 
-if groupby_col and agg_col:
-    result = df.groupby(groupby_col)[agg_col].agg(['mean', 'sum', 'count']).round(2)
-    st.dataframe(result)
+st.plotly_chart(fig_fraud_real, use_container_width=True)
 
 # =========================
-# 6. Raw Data Preview
+# AI Fraud Detection
 # =========================
-with st.expander("👀 Show Raw Data"):
-    st.dataframe(df)
+st.subheader("🤖 AI Fraud Detection")
+
+contamination = st.slider("Fraud Sensitivity", 0.01, 0.10, 0.02)
+
+model = IsolationForest(
+    contamination=contamination,
+    random_state=42
+)
+
+transactions['Anomaly'] = model.fit_predict(transactions[numeric_cols])
+transactions['PredictedFraud'] = transactions['Anomaly'].apply(lambda x: 1 if x == -1 else 0)
+
+predicted_fraud_count = transactions['PredictedFraud'].sum()
+
+st.write(f"🔍 AI Detected Fraud Cases: **{predicted_fraud_count}**")
+
+fig_fraud_ai = px.pie(
+    transactions,
+    names='PredictedFraud',
+    title="AI Fraud Detection"
+)
+
+st.plotly_chart(fig_fraud_ai, use_container_width=True)
 
 # =========================
-# 7. Download Filtered Data
+# Pricing Strategy Analysis
 # =========================
-csv = df.to_csv(index=False).encode('utf-8')
+st.subheader("💰 Pricing Strategy Performance")
+
+pricing_analysis = transactions.groupby('PricingStrategy')['Amount'].sum().reset_index()
+
+fig_price = px.bar(
+    pricing_analysis,
+    x='PricingStrategy',
+    y='Amount',
+    color='PricingStrategy'
+)
+
+st.plotly_chart(fig_price, use_container_width=True)
+
+# =========================
+# Raw Data
+# =========================
+with st.expander("👀 View Raw Data"):
+    st.dataframe(transactions)
+
+# =========================
+# Download
+# =========================
+csv = transactions.to_csv(index=False).encode('utf-8')
 
 st.download_button(
     "⬇️ Download Filtered Data",
     csv,
-    "filtered_transactions.csv",
+    "transactions_filtered.csv",
     "text/csv"
 )
